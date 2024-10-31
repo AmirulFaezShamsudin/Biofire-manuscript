@@ -1,0 +1,281 @@
+---
+title: "Alif-Biofire"
+author: "Faez"
+date: "2024-09-11"
+output: html_document
+---
+
+getwd()
+getwd()
+
+```{r loading packages,eval=FALSE}
+library(pacman)
+p_load(readxl,dplyr,tidyr,table1,ggplot2,RColorBrewer,stringr)
+```
+
+```{r importing datasets, eval=FALSE}
+##clean enviornment first
+rm(list=ls())
+
+##load datasets lab and demographic
+lab.data.alif<-read.csv("/Users/Faez/Folder_yoy/RA_TIDREC UM 2023/Alif_Biofire_article/RESULT_BIOFIRE_EDITED_11-9-2024.csv")
+demographic.data.alif<-read.csv("/Users/Faez/Folder_yoy/RA_TIDREC UM 2023/Alif_Biofire_article/RESULT_CRF_EDITED_11-9-2024.csv")
+
+##check datasets for data type and misisng values
+str(lab.data.alif)
+str(demographic.data.alif)
+blank.value.lab <- sapply(lab.data.alif, function(x) any(x == ""))
+print(blank.value.lab)
+blank.value.demographic <- sapply(demographic.data.alif, function(x) any(x == ""))
+print(blank.value.demographic)
+demographic.blank<-which(demographic.data.alif$Occupation=="")
+print(demographic.blank)
+
+```
+
+```{r bar chart for pathogen detection, eval=FALSE}
+##create a new dataset, select only desirable columns
+lab.data.filtered<-lab.data.alif%>%select(Sample_ID,Date.of.collection.test,Adenovirus:Mycoplasma.pneumoniae)
+
+##change to long format for pathogens 
+str(lab.data.filtered)
+lab.data.filtered.long<-lab.data.filtered%>%
+  pivot_longer(cols = Adenovirus:Mycoplasma.pneumoniae,
+               names_to = "Pathogens", 
+               values_to = "Detection")
+
+##Count detection for each pathogen
+lab.data.filtered.long.pathogens<-lab.data.filtered.long%>%
+  group_by(Pathogens,Detection)%>%summarise(Detection.count=n())%>%ungroup
+
+##pivot wider, as we still need to retain those with negative detection or zero detection
+lab.data.filtered.long.pathogens.wider<-lab.data.filtered.long.pathogens%>%
+  pivot_wider(id_cols = Pathogens,names_from = Detection,values_from = Detection.count)
+
+##replace NA with 0
+lab.data.filtered.long.pathogens.wider<-lab.data.filtered.long.pathogens.wider%>%
+  mutate(Positive=replace_na(Positive,0))
+
+##change position/relocate
+lab.data.filtered.long.pathogens.wider<-lab.data.filtered.long.pathogens.wider%>%relocate(Positive, .after = Pathogens)
+
+##add percentage detection
+lab.data.filtered.long.pathogens.wider.edited<-lab.data.filtered.long.pathogens.wider%>%
+  rowwise()%>%
+  mutate(Total.samples.tested=sum(Negative,Positive),
+         Percent.detection=(round((Positive/Total.samples.tested)*100,1)))
+
+##filter for only positive
+lab.data.positive.only<-lab.data.filtered.long.pathogens.wider.edited%>%filter(Positive!=0)
+
+##create bar chart for pathogens detection
+bar.chart.biofire<-ggplot(lab.data.positive.only,
+                          aes(x=reorder(`Pathogens`,-Percent.detection),
+                              y=Percent.detection))+
+  geom_bar(stat = "identity",width = 0.5,fill="gray",color="black",size=0.7)+
+  geom_text(aes(label = Percent.detection),vjust = -0.5, size = 3.5)+
+  labs(x="Pathogens",y = "Percentage (%)", title = "Pathogens Detection from Biofire Respiratory Panel") +
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 45,hjust = 1))+
+  ylim(0,30)
+ggsave("bar.chart.biofire.RP.jpeg",width = 6,height = 4,dpi = 500,plot = bar.chart.biofire,bg="white")
+
+
+##all panels (change if needed)
+bar.chart.biofire.all.flip<-ggplot(lab.data.filtered.long.pathogens.wider.edited,
+                          aes(x=reorder(`Pathogens`,Percent.detection),
+                              y=Percent.detection))+
+  geom_bar(stat = "identity",width = 0.5,fill="gray",color="black",size=0.7)+
+  geom_text(aes(label = Percent.detection),hjust = -0.5, size = 3.5)+
+  labs(x="Pathogens",y = "Percentage (%)", title = "Pathogens Detection from Biofire Respiratory Panel") +
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 360,hjust = 1))+
+  ylim(0,20)+
+  coord_flip()
+ggsave("bar.chart.biofire.RP.allpanels.flip.jpeg",width = 8,height = 4,dpi = 500,plot = bar.chart.biofire.all.flip,bg="white")
+
+
+```
+
+```{r pie chart for multiple infections, eval=FALSE}
+
+##start from lab.data.filtered.long
+lab.data.detection.binary<-lab.data.filtered.long%>%
+  mutate(Detection=case_when(Detection=="Negative"~0,
+                             Detection=="Positive"~1))
+
+##pivot long
+lab.data.detection.binary.wider<-lab.data.detection.binary%>%
+  pivot_wider(id_cols = Sample_ID,
+              names_from = Pathogens,
+              values_from = Detection)
+
+##row sum for total infection
+lab.data.total.infection.wo.ID<-lab.data.detection.binary.wider%>%select(-c(Sample_ID))%>%
+  rowwise()%>%
+  mutate(Total.infection=sum(c_across(Adenovirus:Mycoplasma.pneumoniae)),
+         Pathogens.detected=
+           paste(names(.)[which(c_across(Adenovirus:Mycoplasma.pneumoniae)==1)],
+                 collapse = ","))%>%ungroup
+lab.data.total.infection<-lab.data.total.infection.wo.ID%>%
+  mutate(Pathogens.detected=case_when(Pathogens.detected==""~"None",
+                                      TRUE~Pathogens.detected))
+lab.data.total.infection <- bind_cols(
+  Sample_ID = lab.data.detection.binary.wider$Sample_ID,lab.data.total.infection)
+
+##convert binary to numeric for Total.infection column
+lab.data.total.infection<-lab.data.total.infection%>%
+  mutate(Total.infection=case_when(Total.infection==1~"Single infection",
+                                   Total.infection==2~"Double infection",
+                                   Total.infection==3~"Triple infection",
+                                   Total.infection==0~"Negative"))
+
+##select column needed for pie chart
+pie.chart.biofire.detection<-lab.data.total.infection%>%select(Total.infection,Pathogens.detected)
+
+##filter for detected only
+pie.chart.biofire.filtered<-pie.chart.biofire.detection%>%filter(Pathogens.detected!="None")
+
+##summarize
+pie.chart.biofire.filtered.summarize<-pie.chart.biofire.filtered%>%group_by(Total.infection)%>%
+  summarise(Count=n())%>%ungroup()%>%mutate(Percent.count=round((Count/sum(Count))*100,1))
+
+slices <- c(91.4,7.1, 1.4)
+lbls <- c("Single infection, n = 64", "Double infection, n = 5\nAdenovirus+Rhinovirus.Enterovirus(3)\nInfluenza B+Rhinovirus.Enterovirus(2)", "Triple infection, n = 1\nAdenovirus+Rhinovirus.Enterovirus+RSV (1)")
+pie_color<-RColorBrewer::brewer.pal(length(lbls),name = "Reds")
+pie_color<-rev(pie_color)
+png("Biofire.RP.pie.chart.png", width = 6, height = 4, units = "in", res = 500)
+biofire_infection_Type<-pie(slices, labels = lbls, col=pie_color,clockwise = TRUE,init.angle = 140,main="Biofire RP detection: Infection Type", cex=0.5,radius = 1.0)
+dev.off()
+
+
+```
+
+```{r heat map: pathogen detection vs clinical symptoms, eval=FALSE}
+
+##from lab.data.alif, we want only Sample_ID, Adenovirus: Mycoplasma
+lab.data.heat.map<-lab.data.alif%>%select(Sample_ID,Adenovirus:Mycoplasma.pneumoniae)
+
+# Remove leading and trailing spaces from all columns
+lab.data.heat.map <- lab.data.heat.map %>%
+  mutate(across(everything(), ~ str_trim(.)))
+
+
+##from demographic.data.alif, we want only Duration.of.fever,Chills.Rigors,Respiratory.symptoms,Runny.Nose,Sore.Throat, Cough,Sputum.Production, Abdominal.Pain, Headache,Muscle.Pain, Joint.Pain, Loss.of.Taste, Loss.of.Smell, Dysuria
+demographic.data.heat.map<-demographic.data.alif%>%select(c(Duration.of.fever,Chills.Rigors,Respiratory.symptoms..if.Yes,Runny.Nose,Sore.Throat,Cough,Sputum.Production,Abdominal.Pain,Headache,Muscle.Ache...Myalgia,Joint.Pain...Arthaigia,Loss.of.Taste,Loss.of.Smell,Dysuria))
+
+##add Sample_ID into demographic datasets
+demographic.data.heat.map<-demographic.data.heat.map%>%mutate(Sample_ID=lab.data.heat.map$Sample_ID)
+##relocate the variable Sample_ID
+demographic.data.heat.map<-demographic.data.heat.map%>%relocate(Sample_ID,.before = Duration.of.fever)
+
+##merge the datasets
+merge.heat.map<-full_join(lab.data.heat.map,demographic.data.heat.map,by="Sample_ID")
+
+##rename symptoms  
+##to rename Respiratory.symptoms..if.Yes = Respiratory.symptoms
+##Muscle.Ache...Myalgia = Muscle.pain
+##Joint.Pain...Arthaigia = Joint.pain
+merge.heat.map <- merge.heat.map %>%
+  mutate(Duration.of.fever = case_when(
+    Duration.of.fever == "Less than 7 Days (Day 1 - Day 6" ~ "Less than 7 Days (Day 1 - Day 6)",TRUE ~ Duration.of.fever))
+merge.heat.map<-merge.heat.map%>%rename("Respiratory.symptoms"=Respiratory.symptoms..if.Yes,
+                                        "Muscle.pain"=Muscle.Ache...Myalgia,
+                                        "Joint.pain"=Joint.Pain...Arthaigia,
+                                        "Fever<7days"=Duration.of.fever)
+merge.heat.map<-merge.heat.map%>%
+  mutate(`Fever<7days`=case_when(`Fever<7days`=="Less than 7 Days (Day 1 - Day 6)"~"Yes",
+                                 `Fever<7days`=="7 to 10 Days"~"No",
+                                 TRUE~`Fever<7days`))
+merge.heat.map.pivot.long<-merge.heat.map%>%pivot_longer(cols = Adenovirus:Mycoplasma.pneumoniae,names_to = "Pathogen.detected",values_to = "Detection")
+merge.heat.map.pivot.long<-merge.heat.map.pivot.long%>%pivot_longer(cols=`Fever<7days`:Dysuria,names_to = "Symptoms",values_to = "Presence")
+
+##summarize
+merge.heat.map.pivot.long.summary <- merge.heat.map.pivot.long %>%
+  group_by(Symptoms, Detection, Pathogen.detected, Presence) %>%
+  summarise(Frequency = n(), .groups = 'drop')
+
+##relocate column for readabiliyt
+merge.heat.map.pivot.long.summary<-merge.heat.map.pivot.long.summary%>%
+  relocate(Detection,.after = Pathogen.detected)
+merge.heat.map.pivot.long.summary<-merge.heat.map.pivot.long.summary%>%
+  relocate(Presence,.after = Symptoms)
+
+##filter for desired pathogens and positive detection
+merge.heat.map.positive.only<-merge.heat.map.pivot.long.summary%>%
+  filter(Pathogen.detected%in%c("Adenovirus","Influenza.B","Human.Rhinovirus.Enterovirus","SARS.COV.2","Respiratory.Syncytial.Virus"))
+
+##complate all combination using complete function
+merge.heat.map.positive.only <- merge.heat.map.positive.only %>%
+  complete(Symptoms, Pathogen.detected, Detection, Presence, fill = list(Frequency = 0))
+
+##relocate column
+merge.heat.map.positive.only<-merge.heat.map.positive.only%>%relocate(Detection,.after = Pathogen.detected)
+merge.heat.map.positive.only<-merge.heat.map.positive.only%>%relocate(Presence,.after = Symptoms)
+
+# Generate the sequence for rows to remove (e.g., every 3rd row starting from 1)
+rows_to_remove <- seq(1, nrow(merge.heat.map.positive.only), by = 3)
+
+# Remove the rows
+merge.heat.map.positive.only <- merge.heat.map.positive.only %>%
+  slice(-rows_to_remove)
+
+##filter for positive detection only
+merge.heat.map.positive.only<-merge.heat.map.positive.only%>%
+  filter(Detection=="Positive" | Symptoms=="Less than 7 Days (Day 1 - Day 6)")
+
+##calculate percentage of symptoms within pathogens detected
+merge.heat.map.positive.only<-merge.heat.map.positive.only%>%
+  group_by(Pathogen.detected,Symptoms)%>%
+  mutate(Percentage.per.pathogens = round((Frequency /sum(Frequency)) * 100, 2))%>%
+  ungroup()
+
+##filter for positive and symptomps present only
+merge.heat.map.positive.only_filtered<-merge.heat.map.positive.only%>%
+  filter(Detection=="Positive" & Presence=="Yes")
+
+
+##check for missing values
+is.na(merge.heat.map.positive.only_filtered)
+blank.value.merge <- sapply(merge.heat.map.positive.only_filtered, function(x) any(x == ""))
+print(merge.heat.map.positive.only_filtered)
+
+##type p value inside cell 
+merge.heat.map.positive.only_filtered <- merge.heat.map.positive.only_filtered %>%
+  mutate(p.value.text = case_when(
+    Symptoms == "Joint.pain" & Pathogen.detected == "Adenovirus" ~ "P<0.001",
+    Symptoms == "Chills.Rigors" & Pathogen.detected == "Influenza.B" ~ "P=0.018",
+    Symptoms == "Respiratory.symptoms" & Pathogen.detected == "Influenza.B" ~ "P=0.032",
+Symptoms == "Runny.Nose" & Pathogen.detected == "Influenza.B" ~ "P=0.004",
+Symptoms == "Sore.Throat" & Pathogen.detected == "Influenza.B" ~ "P=0.048",
+Symptoms == "Cough" & Pathogen.detected == "Influenza.B" ~ "P=0.015",
+Symptoms == "Loss.of.Taste" & Pathogen.detected == "Influenza.B" ~ "P=0.004",
+Symptoms == "Chills.Rigors" & Pathogen.detected == "Human.Rhinovirus.Enterovirus" ~ "P=0.007",
+Symptoms == "Abdominal.Pain" & Pathogen.detected == "Human.Rhinovirus.Enterovirus" ~ "P=0.029",
+Symptoms == "Sputum.Production" & Pathogen.detected == "Respiratory.Syncytial.Virus" ~"P=0.04",
+Symptoms == "Cough" & Pathogen.detected == "SARS.COV.2" ~ "P=0.004",
+Symptoms == "Sputum.Production" & Pathogen.detected == "SARS.COV.2" ~ "P=0.023",
+Symptoms == "Dysuria" & Pathogen.detected == "SARS.COV.2" ~ "P=0.026",
+TRUE ~ "N.S"))
+
+
+##plot heatmap symptoms vs pathogens
+testing.biofire.heatmap<-ggplot(merge.heat.map.positive.only_filtered, aes(x = Pathogen.detected, y = Symptoms, fill = Percentage.per.pathogens)) +
+  geom_tile() +
+  geom_text(aes(label = p.value.text), color = "black", size = 3) +
+  scale_fill_gradient(low = "white", high = "darkred") +
+  labs(title = "Symptoms vs Pathogens Heat Map",
+       x = "Pathogens Detected",
+       y = "Symptoms",
+       fill = "Percentage per Pathogens detection (%)") +  # Improve the label text
+  scale_y_discrete(expand = expansion(mult = c(0.0000000000000001, 0.000000000000000001))) +  
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("testing.biofire.heatmap.png",plot = testing.biofire.heatmap,bg="white",width = 8,height = 6, dpi = 350)
+
+write.csv(merge.heat.map.positive.only_filtered,"merge.heat.map.positive.only_filtered.updated.csv",row.names = FALSE)
+
+
+```
+
